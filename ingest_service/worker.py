@@ -27,8 +27,13 @@ class IngestWorker:
         self._state = StateStore()
 
     def run_once(self) -> None:
+        # 이전 실행에서 중단된 PROCESSING 상태 파일을 PENDING으로 리셋
+        stuck = self._state.reset_stuck_processing()
+        if stuck:
+            log.warning(f"PROCESSING stuck 파일 {stuck}개를 PENDING으로 리셋")
+
         log.info("Polling Drive for changes...")
-        upsert_files, deleted_ids = self._tracker.get_changes()
+        upsert_files, deleted_ids, new_token = self._tracker.get_changes()
         log.info(f"  -> {len(upsert_files)} upserts, {len(deleted_ids)} deletes")
 
         for file_id in deleted_ids:
@@ -40,12 +45,18 @@ class IngestWorker:
                 state = self._state.get(drive_file.file_id)
                 if state and state.file_name != drive_file.file_name:
                     log.info(f"파일명 변경 감지: {state.file_name} → {drive_file.file_name}")
+                    self._call_clean_rename(drive_file.file_id, drive_file.file_name)
                     self._state.update_file_name(drive_file.file_id, drive_file.file_name)
                     self._state.log_event(drive_file.file_id, "NAME_CHANGED", f"{state.file_name} → {drive_file.file_name}")
                 else:
                     log.info(f"Skipping unchanged file: {drive_file.file_name}")
                 continue
             self._handle_upsert(drive_file)
+
+        # 모든 파일 처리 완료 후 page token 저장
+        # 처리 도중 서버가 꺼지면 토큰이 저장되지 않아 다음 실행에서 같은 변경사항을 재감지한다
+        if new_token:
+            self._tracker.commit_token(new_token)
 
         # FAILED 상태 파일 재시도
         failed = self._state.list_by_status(DocStatus.FAILED)
@@ -109,6 +120,13 @@ class IngestWorker:
             log.error(f"Failed: {fname}: {e}", exc_info=True)
             self._state.set_failed(fid, str(e))
             self._state.log_event(fid, "FAILED", str(e))
+
+    def _call_clean_rename(self, file_id: str, file_name: str) -> None:
+        """파일명만 변경된 경우 ChromaDB 메타데이터의 source_file만 업데이트한다."""
+        url = f"{config.clean_api_url}/ingest/{file_id}"
+        with httpx.Client(timeout=30) as client:
+            response = client.patch(url, json={"file_name": file_name})
+            response.raise_for_status()
 
     def _call_clean_ingest(self, file_id: str, file_name: str, raw_bytes: bytes) -> int:
         """AutoDraft_clean의 ingest 엔드포인트에 파일을 전송하고 청크 수를 반환한다."""

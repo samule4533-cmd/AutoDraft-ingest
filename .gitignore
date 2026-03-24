@@ -26,3 +26,6 @@ inspect_output/
 .idea/
 .vscode/
 *.swp
+
+# Claude Code
+CLAUDE.md

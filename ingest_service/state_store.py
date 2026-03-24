@@ -73,6 +73,21 @@ class StateStore:
             )
         self._conn.commit()
 
+    def reset_stuck_processing(self) -> int:
+        """PROCESSING 상태로 멈춘 파일을 PENDING으로 리셋한다.
+        서버 재시작 시 호출하여 이전 실행에서 중단된 파일을 재처리 대상으로 만든다."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE document_state
+                SET status = 'PENDING', updated_at = NOW()
+                WHERE status = 'PROCESSING'
+                """,
+            )
+            count = cur.rowcount
+        self._conn.commit()
+        return count
+
     def set_processing(self, file_id: str) -> None:
         self._set_status(file_id, DocStatus.PROCESSING)
 

@@ -46,27 +46,30 @@ class ChangeTracker:
             token = self._client.get_start_page_token()
             self._save_token(drive_id, token)
 
-    def get_changes(self) -> tuple[list[DriveFile], list[str]]:
+    def get_changes(self) -> tuple[list[DriveFile], list[str], Optional[str]]:
         """
         Returns:
             upsert_files: new or modified PDF files to process
             deleted_file_ids: file IDs that were deleted/trashed
+            new_token: 처리 완료 후 저장할 토큰 (None이면 저장 불필요)
 
-        첫 실행(token 없음): 대상 폴더 전체 스캔 후 start token 저장.
-        이후 실행: page token 기반 변경분만 감지.
+        첫 실행(token 없음): 대상 폴더 전체 스캔 후 start token 바로 저장.
+        이후 실행: page token 기반 변경분만 감지. 토큰은 반환만 하고 저장은 caller가 담당.
         """
         drive_id = config.shared_drive_id
         token = self._get_stored_token(drive_id)
 
         if token is None:
-            # 첫 실행 — 기존 파일 전체 스캔
+            # 첫 실행 — 기존 파일 전체 스캔 후 현재 시점 토큰 저장
             existing = list(self._client.list_pdf_files(folder_id=config.target_folder_id))
             start_token = self._client.get_start_page_token()
             self._save_token(drive_id, start_token)
-            return existing, []
+            return existing, [], None
 
         raw_changes, new_token = self._client.list_changes(token)
-        self._save_token(drive_id, new_token)
+        # 토큰은 여기서 저장하지 않는다.
+        # 처리 완료 후 worker가 commit_token()을 호출해야 저장된다.
+        # 처리 도중 서버가 꺼지면 다음 실행에서 같은 변경사항을 다시 감지한다.
 
         upsert_files: list[DriveFile] = []
         deleted_ids: list[str] = []
@@ -96,4 +99,8 @@ class ChangeTracker:
                     revision_id=file_meta.get("headRevisionId"),
                 ))
 
-        return upsert_files, deleted_ids
+        return upsert_files, deleted_ids, new_token
+
+    def commit_token(self, new_token: str) -> None:
+        """모든 변경사항 처리 완료 후 page token을 저장한다."""
+        self._save_token(config.shared_drive_id, new_token)
