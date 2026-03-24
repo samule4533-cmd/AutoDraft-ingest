@@ -1,0 +1,28 @@
+# 환경 변수 및 시크릿
+.env
+.env.*
+
+# Google 인증 정보
+ops/credentials/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 테스트 캐시
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 검사 출력
+inspect_output/
+
+# 에디터
+.idea/
+.vscode/
+*.swp
